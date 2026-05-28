@@ -1,0 +1,10 @@
+[project]
+name = "epilepsy-guard"
+version = "0.1.0"
+description = "Windows desktop photosensitive-epilepsy content detector with instant blackout shield"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
