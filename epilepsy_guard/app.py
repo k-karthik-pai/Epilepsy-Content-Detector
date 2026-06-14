@@ -11,14 +11,22 @@ from dataclasses import asdict
 from .config import example_config, load_config
 from .detector import PhotosensitiveRiskDetector
 from .logging_utils import RiskLogger
-from .models import AppConfig, RiskDecision, RiskEvidence, RiskLevel
+from .models import AppConfig, RiskDecision, RiskLevel
 from .screen_capture import ScreenCapture
 from .shield import BlackoutShield
+from .synthetic import scenario_frames, scenario_names
 
 
 class EpilepsyGuardApp:
-    def __init__(self, config: AppConfig):
+    def __init__(
+        self,
+        config: AppConfig,
+        duration_seconds: float | None = None,
+        print_events: bool = False,
+    ):
         self.config = config
+        self.duration_seconds = duration_seconds
+        self.print_events = print_events
         self.capture = ScreenCapture()
         self.detector = PhotosensitiveRiskDetector(config.detector)
         self.logger = RiskLogger(config.log_path)
@@ -40,6 +48,8 @@ class EpilepsyGuardApp:
         )
         thread = threading.Thread(target=self._capture_loop, name="capture-loop", daemon=True)
         thread.start()
+        if self.duration_seconds is not None:
+            self.shield.root.after(max(1, int(self.duration_seconds * 1000)), self.shield.root.quit)
         self.shield.root.after(50, self._ui_tick)
         try:
             self.shield.root.mainloop()
@@ -52,50 +62,24 @@ class EpilepsyGuardApp:
         interval = 1.0 / max(1.0, self.config.detector.sample_fps)
         while not self._stop.is_set():
             started = time.monotonic()
-            try:
-                for frame in self.capture.capture_all():
-                    decision = self.detector.analyze(frame)
-                    self._events.put(decision)
-                self._last_frame_at = time.monotonic()
-            except Exception as exc:
-                if self.config.detector.fail_closed:
-                    evidence = RiskEvidence(
-                        "CaptureUnreliable",
-                        "all",
-                        type(exc).__name__,
-                        "no capture errors",
-                        {"message": str(exc)},
-                    )
-                    self._events.put(
-                        RiskDecision(RiskLevel.BLOCK, ("CaptureUnreliable",), (evidence,))
-                    )
-                self.logger.info("capture_error", error=repr(exc))
-                time.sleep(0.25)
+            self._capture_once()
             elapsed = time.monotonic() - started
             time.sleep(max(0.0, interval - elapsed))
+
+    def _capture_once(self) -> None:
+        try:
+            for frame in self.capture.capture_all():
+                decision = self.detector.analyze(frame)
+                self._events.put(decision)
+            self._last_frame_at = time.monotonic()
+        except Exception as exc:
+            self.detector.reset_all()
+            self.logger.info("capture_error", error=repr(exc))
+            time.sleep(0.25)
 
     def _ui_tick(self) -> None:
         now = time.monotonic()
         self.shield.poll_emergency_unlock()
-
-        if (
-            self.config.detector.fail_closed
-            and now - self._last_frame_at > self.config.detector.capture_timeout_seconds
-        ):
-            self._handle_decision(
-                RiskDecision(
-                    RiskLevel.BLOCK,
-                    ("CaptureTimeout",),
-                    (
-                        RiskEvidence(
-                            "CaptureTimeout",
-                            "all",
-                            round(now - self._last_frame_at, 3),
-                            self.config.detector.capture_timeout_seconds,
-                        ),
-                    ),
-                )
-            )
 
         while True:
             try:
@@ -108,6 +92,8 @@ class EpilepsyGuardApp:
 
     def _handle_decision(self, decision: RiskDecision) -> None:
         now = time.monotonic()
+        if self.print_events and decision.level is not RiskLevel.SAFE:
+            print(json.dumps(_decision_to_dict(decision), separators=(",", ":")), flush=True)
         if decision.level is RiskLevel.BLOCK:
             self._safe_since = None
             self.logger.write(decision)
@@ -148,6 +134,33 @@ def run_once(config: AppConfig) -> int:
     return 0 if all(item.level is RiskLevel.SAFE for item in decisions) else 2
 
 
+def run_simulation(
+    config: AppConfig,
+    scenario: str,
+    simulate_shield: bool = False,
+    shield_seconds: float = 2.0,
+) -> int:
+    detector = PhotosensitiveRiskDetector(config.detector)
+    decisions = [detector.analyze(frame) for frame in scenario_frames(scenario, config.detector.sample_fps)]
+    print(json.dumps([_decision_to_dict(item) for item in decisions], indent=2))
+    blocked = any(item.level is RiskLevel.BLOCK for item in decisions)
+    if blocked and simulate_shield and not config.monitor_only:
+        capture = ScreenCapture()
+        shield = BlackoutShield(
+            capture.monitors,
+            config.detector.manual_unlock_hold_seconds,
+            config.detector.manual_unlock_snooze_seconds,
+        )
+        reason = ",".join(
+            sorted({reason for decision in decisions for reason in decision.reasons})
+        ) or "SyntheticRisk"
+        shield.show(reason)
+        shield.root.after(max(1, int(shield_seconds * 1000)), shield.root.quit)
+        shield.root.mainloop()
+        shield.hide()
+    return 2 if blocked else 0
+
+
 def _decision_to_dict(decision: RiskDecision) -> dict[str, object]:
     return {
         "level": decision.level.value,
@@ -174,6 +187,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Log/print detections without showing the blackout shield. Not recommended for patient use.",
     )
+    parser.add_argument("--duration", type=float, help="Run the live loop for this many seconds, then exit.")
+    parser.add_argument("--print-events", action="store_true", help="Print non-safe live decisions to the console.")
+    parser.add_argument(
+        "--simulate",
+        choices=scenario_names(),
+        help="Run a synthetic frame scenario without displaying flashing content.",
+    )
+    parser.add_argument(
+        "--simulate-shield",
+        action="store_true",
+        help="During --simulate, show the black shield briefly only if the detector emits block.",
+    )
     parser.add_argument("--print-example-config", action="store_true", help="Print an example JSON config.")
     return parser
 
@@ -189,15 +214,17 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config(args.config)
     if args.monitor_only:
         config.monitor_only = True
+    if args.simulate:
+        shield_seconds = args.duration if args.duration is not None else 2.0
+        return run_simulation(config, args.simulate, args.simulate_shield, shield_seconds)
     if args.once:
         return run_once(config)
 
     if sys.platform != "win32":
         print("Epilepsy Guard currently requires Windows for screen capture and blackout shielding.", file=sys.stderr)
         return 1
-    return EpilepsyGuardApp(config).run()
+    return EpilepsyGuardApp(config, args.duration, args.print_events).run()
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

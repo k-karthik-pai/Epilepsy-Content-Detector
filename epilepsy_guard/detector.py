@@ -43,6 +43,7 @@ class PhotosensitiveRiskDetector:
         self._flash_events_by_monitor: dict[str, deque[float]] = {}
         self._red_events_by_monitor: dict[str, deque[float]] = {}
         self._rapid_events_by_monitor: dict[str, deque[float]] = {}
+        self._pattern_streak_by_monitor: dict[str, int] = {}
 
     def analyze(self, frame: ScreenFrame) -> RiskDecision:
         sampled = self._sample(frame)
@@ -127,6 +128,17 @@ class PhotosensitiveRiskDetector:
         self._flash_events_by_monitor.pop(monitor_id, None)
         self._red_events_by_monitor.pop(monitor_id, None)
         self._rapid_events_by_monitor.pop(monitor_id, None)
+        self._pattern_streak_by_monitor.pop(monitor_id, None)
+
+    def reset_all(self) -> None:
+        self._previous_by_monitor.clear()
+        self._cell_signs_by_monitor.clear()
+        self._red_signs_by_monitor.clear()
+        self._global_sign_by_monitor.clear()
+        self._flash_events_by_monitor.clear()
+        self._red_events_by_monitor.clear()
+        self._rapid_events_by_monitor.clear()
+        self._pattern_streak_by_monitor.clear()
 
     def _sample(self, frame: ScreenFrame) -> _SampledFrame:
         gw = max(8, self.config.grid_width)
@@ -216,7 +228,9 @@ class PhotosensitiveRiskDetector:
         horizontal_area = self._stripe_area(current, axis="horizontal")
         vertical_area = self._stripe_area(current, axis="vertical")
         area = max(horizontal_area, vertical_area)
-        if area < self.config.pattern_motion_area_ratio:
+        monitor_id = frame.monitor.id
+        if area < min(self.config.pattern_motion_area_ratio, self.config.pattern_stationary_area_ratio):
+            self._pattern_streak_by_monitor.pop(monitor_id, None)
             return RiskDecision.safe()
 
         moving = False
@@ -233,16 +247,26 @@ class PhotosensitiveRiskDetector:
             if moving
             else self.config.pattern_stationary_area_ratio
         )
+        if area < threshold:
+            self._pattern_streak_by_monitor.pop(monitor_id, None)
+            return RiskDecision.safe()
+
+        streak = self._pattern_streak_by_monitor.get(monitor_id, 0) + 1
+        self._pattern_streak_by_monitor[monitor_id] = streak
         evidence = (
             RiskEvidence(
                 "RegularPattern",
-                frame.monitor.id,
+                monitor_id,
                 round(area, 4),
                 threshold,
-                {"moving_or_reversing": moving},
+                {
+                    "moving_or_reversing": moving,
+                    "confirm_frames": streak,
+                    "required_confirm_frames": self.config.pattern_confirm_frames,
+                },
             ),
         )
-        if area >= threshold:
+        if not moving or streak >= self.config.pattern_confirm_frames:
             return RiskDecision(RiskLevel.BLOCK, ("RegularPattern",), evidence)
         return RiskDecision(RiskLevel.CAUTION, ("RegularPattern",), evidence)
 
@@ -288,4 +312,3 @@ class PhotosensitiveRiskDetector:
         while events and events[0] < cutoff:
             events.popleft()
         return len(events)
-

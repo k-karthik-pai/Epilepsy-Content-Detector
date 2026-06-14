@@ -12,7 +12,7 @@ This is an early clinical-assistive prototype. It implements:
 - Guideline-inspired detection for large-area luminance flashes, saturated red
   flashes, rapid cuts, and high-contrast regular patterns.
 - A topmost black blackout shield for all monitors.
-- Fail-closed behavior when capture becomes unreliable.
+- Capture-error logging without blacking out on capture failures.
 - Synthetic tests that exercise risky patterns without displaying dangerous
   flashing visuals.
 
@@ -37,6 +37,33 @@ Print a full example config:
 
 ```powershell
 python -m epilepsy_guard --print-example-config
+```
+
+Run without showing the blackout shield while you test normal desktop activity:
+
+```powershell
+python -m epilepsy_guard --monitor-only --print-events
+```
+
+Run a timed live smoke test for 10 seconds:
+
+```powershell
+python -m epilepsy_guard --monitor-only --print-events --duration 10
+```
+
+Run safe synthetic detector checks without displaying flashing content:
+
+```powershell
+python -m epilepsy_guard --simulate safe-browser
+python -m epilepsy_guard --simulate general-flash
+python -m epilepsy_guard --simulate red-flash
+python -m epilepsy_guard --simulate regular-pattern
+```
+
+Show the black shield briefly only after a synthetic risky sequence is detected:
+
+```powershell
+python -m epilepsy_guard --simulate general-flash --simulate-shield --duration 2
 ```
 
 ## Emergency Unlock

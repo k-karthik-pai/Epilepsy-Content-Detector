@@ -18,10 +18,10 @@ The first implementation uses deterministic rules derived from public guidance:
 - [Epilepsy Foundation photosensitivity guidance](https://go.epilepsy.com/what-is-epilepsy/seizure-triggers/photosensitivity),
   plus Epilepsy Society and Epilepsy Action patient guidance on common triggers.
 
-The app intentionally blocks on uncertainty when `fail_closed` is enabled. This
-can cause false positives, blackouts during capture problems, and interruptions
-while the detector is still being tuned. That behavior is deliberate for patient
-safety.
+The app logs capture uncertainty instead of blacking out so normal apps such as
+browsers do not trigger a shield just because Windows capture briefly fails.
+This means the shield is reserved for detected content risk, but it also means
+capture failures can reduce protection until the capture path is fixed.
 
 Do not test the app by displaying real strobe videos to a person with epilepsy.
 Use the synthetic unit tests and offline generated frames instead.

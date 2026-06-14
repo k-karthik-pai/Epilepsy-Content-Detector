@@ -43,17 +43,16 @@ class DetectorConfig:
     red_ratio_threshold: float = 0.80
     red_ratio_delta: float = 0.20
     block_flash_count: int = 3
-    caution_flash_count: int = 2
+    caution_flash_count: int = 3
     flash_area_ratio: float = 0.25
     red_flash_area_ratio: float = 0.20
     rapid_cut_area_ratio: float = 0.45
     rapid_cut_delta: float = 0.20
-    pattern_stationary_area_ratio: float = 0.40
-    pattern_motion_area_ratio: float = 0.25
-    pattern_min_pairs: int = 5
-    pattern_contrast_delta: float = 0.25
-    fail_closed: bool = True
-    capture_timeout_seconds: float = 1.5
+    pattern_stationary_area_ratio: float = 0.85
+    pattern_motion_area_ratio: float = 0.55
+    pattern_min_pairs: int = 6
+    pattern_contrast_delta: float = 0.30
+    pattern_confirm_frames: int = 2
     auto_release_requires_capture_exclusion: bool = True
     manual_unlock_hold_seconds: float = 2.0
     manual_unlock_snooze_seconds: float = 10.0
@@ -84,4 +83,3 @@ class RiskDecision:
     @classmethod
     def safe(cls) -> "RiskDecision":
         return cls(RiskLevel.SAFE)
-
