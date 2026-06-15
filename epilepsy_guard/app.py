@@ -27,7 +27,7 @@ class EpilepsyGuardApp:
         self.config = config
         self.duration_seconds = duration_seconds
         self.print_events = print_events
-        self.capture = ScreenCapture()
+        self.capture = ScreenCapture(config.detector.grid_width, config.detector.grid_height)
         self.detector = PhotosensitiveRiskDetector(config.detector)
         self.logger = RiskLogger(config.log_path)
         self.shield = BlackoutShield(
@@ -50,7 +50,7 @@ class EpilepsyGuardApp:
         thread.start()
         if self.duration_seconds is not None:
             self.shield.root.after(max(1, int(self.duration_seconds * 1000)), self.shield.root.quit)
-        self.shield.root.after(50, self._ui_tick)
+        self.shield.root.after(self.config.detector.ui_tick_ms, self._ui_tick)
         try:
             self.shield.root.mainloop()
         finally:
@@ -80,6 +80,7 @@ class EpilepsyGuardApp:
     def _ui_tick(self) -> None:
         now = time.monotonic()
         self.shield.poll_emergency_unlock()
+        self._release_expired_shield(now)
 
         while True:
             try:
@@ -88,12 +89,13 @@ class EpilepsyGuardApp:
                 break
             self._handle_decision(decision)
 
-        self.shield.root.after(50, self._ui_tick)
+        self.shield.root.after(self.config.detector.ui_tick_ms, self._ui_tick)
 
     def _handle_decision(self, decision: RiskDecision) -> None:
         now = time.monotonic()
         if self.print_events and decision.level is not RiskLevel.SAFE:
             print(json.dumps(_decision_to_dict(decision), separators=(",", ":")), flush=True)
+        self._release_expired_shield(now)
         if decision.level is RiskLevel.BLOCK:
             self._safe_since = None
             self.logger.write(decision)
@@ -123,9 +125,26 @@ class EpilepsyGuardApp:
             self.logger.info("shield_auto_release")
             self.shield.hide()
 
+    def _release_expired_shield(self, now: float) -> bool:
+        if not self.shield.state.active or self.shield.state.shown_at <= 0.0:
+            return False
+        active_seconds = now - self.shield.state.shown_at
+        if active_seconds < self.config.detector.max_blackout_seconds:
+            return False
+        snoozed_until = now + self.config.detector.manual_unlock_snooze_seconds
+        self.shield.state.snoozed_until = max(self.shield.state.snoozed_until, snoozed_until)
+        self.logger.info(
+            "shield_max_duration_release",
+            reason=self.shield.state.reason,
+            active_seconds=round(active_seconds, 3),
+        )
+        self.shield.hide()
+        self._safe_since = None
+        return True
+
 
 def run_once(config: AppConfig) -> int:
-    capture = ScreenCapture()
+    capture = ScreenCapture(config.detector.grid_width, config.detector.grid_height)
     detector = PhotosensitiveRiskDetector(config.detector)
     decisions: list[RiskDecision] = []
     for frame in capture.capture_all():
@@ -145,7 +164,7 @@ def run_simulation(
     print(json.dumps([_decision_to_dict(item) for item in decisions], indent=2))
     blocked = any(item.level is RiskLevel.BLOCK for item in decisions)
     if blocked and simulate_shield and not config.monitor_only:
-        capture = ScreenCapture()
+        capture = ScreenCapture(config.detector.grid_width, config.detector.grid_height)
         shield = BlackoutShield(
             capture.monitors,
             config.detector.manual_unlock_hold_seconds,
@@ -155,7 +174,13 @@ def run_simulation(
             sorted({reason for decision in decisions for reason in decision.reasons})
         ) or "SyntheticRisk"
         shield.show(reason)
-        shield.root.after(max(1, int(shield_seconds * 1000)), shield.root.quit)
+        display_seconds = min(shield_seconds, config.detector.max_blackout_seconds)
+
+        def release_simulated_shield() -> None:
+            shield.hide()
+            shield.root.quit()
+
+        shield.root.after(max(1, int(display_seconds * 1000)), release_simulated_shield)
         shield.root.mainloop()
         shield.hide()
     return 2 if blocked else 0

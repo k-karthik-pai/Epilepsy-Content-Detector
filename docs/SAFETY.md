@@ -23,5 +23,9 @@ browsers do not trigger a shield just because Windows capture briefly fails.
 This means the shield is reserved for detected content risk, but it also means
 capture failures can reduce protection until the capture path is fixed.
 
+The shield has a maximum duration by default so this prototype cannot trap the
+screen black indefinitely. Treat the release as a usability fail-safe, not proof
+that the underlying content became safe.
+
 Do not test the app by displaying real strobe videos to a person with epilepsy.
 Use the synthetic unit tests and offline generated frames instead.

@@ -9,9 +9,12 @@ content looks unsafe.
 This is an early clinical-assistive prototype. It implements:
 
 - Native Windows screenshot capture through Win32 APIs.
+- Downscaled analysis capture for faster detection latency.
 - Guideline-inspired detection for large-area luminance flashes, saturated red
-  flashes, rapid cuts, and high-contrast regular patterns.
-- A topmost black blackout shield for all monitors.
+  flashes, localized windowed flashes, rapid cuts, and high-contrast regular
+  patterns.
+- A topmost black blackout shield for all monitors, with a maximum duration so
+  it cannot stay black indefinitely.
 - Capture-error logging without blacking out on capture failures.
 - Synthetic tests that exercise risky patterns without displaying dangerous
   flashing visuals.
@@ -56,6 +59,7 @@ Run safe synthetic detector checks without displaying flashing content:
 ```powershell
 python -m epilepsy_guard --simulate safe-browser
 python -m epilepsy_guard --simulate general-flash
+python -m epilepsy_guard --simulate windowed-flash
 python -m epilepsy_guard --simulate red-flash
 python -m epilepsy_guard --simulate regular-pattern
 ```
@@ -64,7 +68,11 @@ Show the black shield briefly only after a synthetic risky sequence is detected:
 
 ```powershell
 python -m epilepsy_guard --simulate general-flash --simulate-shield --duration 2
+python -m epilepsy_guard --simulate windowed-flash --simulate-shield --duration 2
 ```
+
+The shield also auto-releases after the configured `max_blackout_seconds`
+default, even on PCs where Windows capture-exclusion does not work.
 
 ## Emergency Unlock
 

@@ -61,6 +61,27 @@ def partial_stripes_frame(
     return ScreenFrame(SYNTHETIC_MONITOR, timestamp, width, height, bytes(data))
 
 
+def windowed_flash_frame(
+    timestamp: float,
+    lit: bool,
+    width: int = 160,
+    height: int = 90,
+) -> ScreenFrame:
+    dark = bytes((0, 0, 0, 255))
+    light = bytes((255, 255, 255, 255))
+    data = bytearray(bytes((32, 32, 32, 255)) * width * height)
+    window_width = width // 2
+    window_height = height // 2
+    start_x = (width - window_width) // 2
+    start_y = (height - window_height) // 2
+    pixel = light if lit else dark
+    for y in range(start_y, start_y + window_height):
+        for x in range(start_x, start_x + window_width):
+            offset = (y * width + x) * 4
+            data[offset : offset + 4] = pixel
+    return ScreenFrame(SYNTHETIC_MONITOR, timestamp, width, height, bytes(data))
+
+
 def stripes_frame(timestamp: float, width: int = 160, height: int = 90) -> ScreenFrame:
     data = bytearray()
     for _y in range(height):
@@ -92,6 +113,11 @@ def scenario_frames(name: str, sample_fps: float = 12.0) -> Iterable[ScreenFrame
             yield solid_frame(index * step, color)
         return
 
+    if name == "windowed-flash":
+        for index in range(12):
+            yield windowed_flash_frame(index * step, bool(index % 2))
+        return
+
     if name == "red-flash":
         colors = [(0, 0, 0), (255, 0, 0)] * 6
         for index, color in enumerate(colors):
@@ -106,5 +132,11 @@ def scenario_frames(name: str, sample_fps: float = 12.0) -> Iterable[ScreenFrame
 
 
 def scenario_names() -> tuple[str, ...]:
-    return ("safe-browser", "partial-pattern", "general-flash", "red-flash", "regular-pattern")
-
+    return (
+        "safe-browser",
+        "partial-pattern",
+        "general-flash",
+        "windowed-flash",
+        "red-flash",
+        "regular-pattern",
+    )

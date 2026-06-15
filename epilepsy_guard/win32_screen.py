@@ -14,6 +14,7 @@ SRCCOPY = 0x00CC0020
 CAPTUREBLT = 0x40000000
 DIB_RGB_COLORS = 0
 BI_RGB = 0
+COLORONCOLOR = 3
 MONITORINFOF_PRIMARY = 1
 WDA_EXCLUDEFROMCAPTURE = 0x00000011
 
@@ -116,9 +117,13 @@ def enumerate_monitors() -> list[Monitor]:
 
 
 def capture_bgra(monitor: Monitor) -> bytes:
-    width = monitor.width
-    height = monitor.height
-    if width <= 0 or height <= 0:
+    return capture_bgra_scaled(monitor, monitor.width, monitor.height)
+
+
+def capture_bgra_scaled(monitor: Monitor, width: int, height: int) -> bytes:
+    source_width = monitor.width
+    source_height = monitor.height
+    if source_width <= 0 or source_height <= 0 or width <= 0 or height <= 0:
         raise ValueError(f"Invalid monitor dimensions: {monitor}")
 
     screen_dc = user32.GetDC(None)
@@ -138,7 +143,8 @@ def capture_bgra(monitor: Monitor) -> bytes:
         if not old_bitmap:
             raise ctypes.WinError(ctypes.get_last_error())
 
-        if not gdi32.BitBlt(
+        gdi32.SetStretchBltMode(memory_dc, COLORONCOLOR)
+        if not gdi32.StretchBlt(
             memory_dc,
             0,
             0,
@@ -147,6 +153,8 @@ def capture_bgra(monitor: Monitor) -> bytes:
             screen_dc,
             monitor.left,
             monitor.top,
+            source_width,
+            source_height,
             SRCCOPY | CAPTUREBLT,
         ):
             raise ctypes.WinError(ctypes.get_last_error())
@@ -190,4 +198,3 @@ def exclude_window_from_capture(hwnd: int) -> bool:
 
 def is_hotkey_pressed(vk_code: int) -> bool:
     return bool(user32.GetAsyncKeyState(vk_code) & 0x8000)
-

@@ -3,13 +3,15 @@ from __future__ import annotations
 import time
 
 from .models import Monitor, ScreenFrame
-from .win32_screen import capture_bgra, enable_dpi_awareness, enumerate_monitors
+from .win32_screen import capture_bgra_scaled, enable_dpi_awareness, enumerate_monitors
 
 
 class ScreenCapture:
-    def __init__(self) -> None:
+    def __init__(self, analysis_width: int = 96, analysis_height: int = 54) -> None:
         enable_dpi_awareness()
         self._monitors = enumerate_monitors()
+        self._analysis_width = analysis_width
+        self._analysis_height = analysis_height
 
     @property
     def monitors(self) -> list[Monitor]:
@@ -27,10 +29,9 @@ class ScreenCapture:
                 ScreenFrame(
                     monitor=monitor,
                     timestamp=now,
-                    width=monitor.width,
-                    height=monitor.height,
-                    bgra=capture_bgra(monitor),
+                    width=self._analysis_width,
+                    height=self._analysis_height,
+                    bgra=capture_bgra_scaled(monitor, self._analysis_width, self._analysis_height),
                 )
             )
         return frames
-

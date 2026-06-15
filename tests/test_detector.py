@@ -4,7 +4,7 @@ import unittest
 
 from epilepsy_guard.detector import PhotosensitiveRiskDetector
 from epilepsy_guard.models import DetectorConfig, Monitor, RiskLevel, ScreenFrame
-from epilepsy_guard.synthetic import scenario_frames
+from epilepsy_guard.synthetic import scenario_frames, windowed_flash_frame
 
 
 MONITOR = Monitor("test", 0, 0, 160, 90, True)
@@ -83,9 +83,28 @@ def browser_like_frame(timestamp: float, width: int = 160, height: int = 90) -> 
     return ScreenFrame(MONITOR, timestamp, width, height, bytes(data))
 
 
+def partial_area_frame(
+    timestamp: float,
+    lit: bool,
+    area_ratio: float,
+    width: int = 160,
+    height: int = 90,
+) -> ScreenFrame:
+    dark = bytes((0, 0, 0, 255))
+    light = bytes((255, 255, 255, 255))
+    data = bytearray(dark * width * height)
+    active_width = int(width * area_ratio)
+    active_pixel = light if lit else dark
+    for y in range(height):
+        for x in range(active_width):
+            offset = (y * width + x) * 4
+            data[offset : offset + 4] = active_pixel
+    return ScreenFrame(MONITOR, timestamp, width, height, bytes(data))
+
+
 class DetectorTests(unittest.TestCase):
     def config(self) -> DetectorConfig:
-        return DetectorConfig(grid_width=40, grid_height=24, sample_fps=12.0)
+        return DetectorConfig(grid_width=40, grid_height=24, sample_fps=30.0)
 
     def test_static_content_is_safe(self) -> None:
         detector = PhotosensitiveRiskDetector(self.config())
@@ -101,6 +120,18 @@ class DetectorTests(unittest.TestCase):
         ]
         self.assertEqual(decisions[-1].level, RiskLevel.BLOCK)
         self.assertIn("GeneralFlash", decisions[-1].reasons)
+
+    def test_large_alternating_flash_blocks_quickly(self) -> None:
+        detector = PhotosensitiveRiskDetector(self.config())
+        colors = [(0, 0, 0), (255, 255, 255)] * 6
+        decisions = [
+            detector.analyze(solid_frame(index / 30, color))
+            for index, color in enumerate(colors)
+        ]
+        first_block = next(
+            index for index, decision in enumerate(decisions) if decision.level is RiskLevel.BLOCK
+        )
+        self.assertLessEqual(first_block / 30, 0.15)
 
     def test_saturated_red_flash_blocks(self) -> None:
         detector = PhotosensitiveRiskDetector(self.config())
@@ -147,6 +178,37 @@ class DetectorTests(unittest.TestCase):
         decisions = [detector.analyze(frame) for frame in frames]
         self.assertTrue(all(decision.level is not RiskLevel.BLOCK for decision in decisions))
 
+    def test_medium_area_screen_transitions_do_not_block(self) -> None:
+        detector = PhotosensitiveRiskDetector(self.config())
+        frames = [
+            partial_area_frame(0 / 30, False, 0.25),
+            partial_area_frame(1 / 30, True, 0.35),
+            partial_area_frame(2 / 30, False, 0.45),
+            partial_area_frame(3 / 30, True, 0.55),
+        ]
+        decisions = [detector.analyze(frame) for frame in frames]
+        self.assertTrue(all(decision.level is not RiskLevel.BLOCK for decision in decisions))
+
+    def test_windowed_flash_blocks_without_fullscreen_area(self) -> None:
+        detector = PhotosensitiveRiskDetector(self.config())
+        decisions = [
+            detector.analyze(windowed_flash_frame(index / 30, bool(index % 2)))
+            for index in range(12)
+        ]
+        self.assertEqual(decisions[-1].level, RiskLevel.BLOCK)
+        self.assertIn("LocalizedFlash", decisions[-1].reasons)
+
+    def test_windowed_flash_blocks_quickly(self) -> None:
+        detector = PhotosensitiveRiskDetector(self.config())
+        decisions = [
+            detector.analyze(windowed_flash_frame(index / 30, bool(index % 2)))
+            for index in range(12)
+        ]
+        first_block = next(
+            index for index, decision in enumerate(decisions) if decision.level is RiskLevel.BLOCK
+        )
+        self.assertLessEqual(first_block / 30, 0.20)
+
     def test_synthetic_safe_scenarios_do_not_block(self) -> None:
         for scenario in ("safe-browser", "partial-pattern"):
             with self.subTest(scenario=scenario):
@@ -155,7 +217,7 @@ class DetectorTests(unittest.TestCase):
                 self.assertTrue(all(decision.level is not RiskLevel.BLOCK for decision in decisions))
 
     def test_synthetic_risk_scenarios_block(self) -> None:
-        for scenario in ("general-flash", "red-flash", "regular-pattern"):
+        for scenario in ("general-flash", "windowed-flash", "red-flash", "regular-pattern"):
             with self.subTest(scenario=scenario):
                 detector = PhotosensitiveRiskDetector(self.config())
                 decisions = [detector.analyze(frame) for frame in scenario_frames(scenario, 12.0)]

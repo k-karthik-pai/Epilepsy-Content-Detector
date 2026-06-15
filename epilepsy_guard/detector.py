@@ -25,6 +25,14 @@ class _SampledFrame:
     red_saturated: list[bool]
 
 
+@dataclass(frozen=True)
+class _FlashRegion:
+    area_ratio: float
+    largest_area_ratio: float
+    largest_bbox: tuple[int, int, int, int] | None
+    largest_fill_ratio: float
+
+
 class PhotosensitiveRiskDetector:
     """Guideline-inspired detector for flashes, red flashes, rapid cuts, and patterns.
 
@@ -43,6 +51,10 @@ class PhotosensitiveRiskDetector:
         self._flash_events_by_monitor: dict[str, deque[float]] = {}
         self._red_events_by_monitor: dict[str, deque[float]] = {}
         self._rapid_events_by_monitor: dict[str, deque[float]] = {}
+        self._localized_flash_events_by_monitor: dict[str, deque[float]] = {}
+        self._localized_red_events_by_monitor: dict[str, deque[float]] = {}
+        self._localized_bbox_by_monitor: dict[str, tuple[int, int, int, int]] = {}
+        self._localized_red_bbox_by_monitor: dict[str, tuple[int, int, int, int]] = {}
         self._pattern_streak_by_monitor: dict[str, int] = {}
 
     def analyze(self, frame: ScreenFrame) -> RiskDecision:
@@ -61,8 +73,8 @@ class PhotosensitiveRiskDetector:
         evidence: list[RiskEvidence] = []
         reasons: list[str] = []
 
-        general_area = self._detect_general_flash_area(monitor_id, previous, sampled)
-        if general_area >= self.config.flash_area_ratio:
+        general_region = self._detect_general_flash_region(monitor_id, previous, sampled)
+        if general_region.area_ratio >= self.config.flash_area_ratio:
             events = self._events_for(self._flash_events_by_monitor, monitor_id)
             events.append(sampled.timestamp)
             count = self._count_recent(events, sampled.timestamp)
@@ -72,14 +84,43 @@ class PhotosensitiveRiskDetector:
                     monitor_id,
                     count,
                     self.config.block_flash_count,
-                    {"affected_area_ratio": round(general_area, 4)},
+                    {"affected_area_ratio": round(general_region.area_ratio, 4)},
                 )
             )
-            if count > self.config.block_flash_count:
+            if (
+                count >= self.config.block_flash_count
+                or (
+                    general_region.area_ratio >= self.config.severe_flash_area_ratio
+                    and count >= self.config.severe_block_flash_count
+                )
+            ):
                 reasons.append("GeneralFlash")
+        elif self._is_localized_region(general_region, self.config.localized_flash_area_ratio):
+            count = self._append_localized_event(
+                self._localized_flash_events_by_monitor,
+                self._localized_bbox_by_monitor,
+                monitor_id,
+                sampled.timestamp,
+                general_region.largest_bbox,
+            )
+            evidence.append(
+                RiskEvidence(
+                    "LocalizedFlash",
+                    monitor_id,
+                    count,
+                    self.config.localized_block_flash_count,
+                    {
+                        "affected_area_ratio": round(general_region.area_ratio, 4),
+                        "localized_area_ratio": round(general_region.largest_area_ratio, 4),
+                        "bbox": general_region.largest_bbox,
+                    },
+                )
+            )
+            if count >= self.config.localized_block_flash_count:
+                reasons.append("LocalizedFlash")
 
-        red_area = self._detect_red_flash_area(monitor_id, previous, sampled)
-        if red_area >= self.config.red_flash_area_ratio:
+        red_region = self._detect_red_flash_region(monitor_id, previous, sampled)
+        if red_region.area_ratio >= self.config.red_flash_area_ratio:
             events = self._events_for(self._red_events_by_monitor, monitor_id)
             events.append(sampled.timestamp)
             count = self._count_recent(events, sampled.timestamp)
@@ -89,11 +130,34 @@ class PhotosensitiveRiskDetector:
                     monitor_id,
                     count,
                     self.config.block_flash_count,
-                    {"affected_area_ratio": round(red_area, 4)},
+                    {"affected_area_ratio": round(red_region.area_ratio, 4)},
                 )
             )
-            if count > self.config.block_flash_count:
+            if count >= self.config.block_flash_count:
                 reasons.append("RedFlash")
+        elif self._is_localized_region(red_region, self.config.localized_red_flash_area_ratio):
+            count = self._append_localized_event(
+                self._localized_red_events_by_monitor,
+                self._localized_red_bbox_by_monitor,
+                monitor_id,
+                sampled.timestamp,
+                red_region.largest_bbox,
+            )
+            evidence.append(
+                RiskEvidence(
+                    "LocalizedRedFlash",
+                    monitor_id,
+                    count,
+                    self.config.localized_red_block_flash_count,
+                    {
+                        "affected_area_ratio": round(red_region.area_ratio, 4),
+                        "localized_area_ratio": round(red_region.largest_area_ratio, 4),
+                        "bbox": red_region.largest_bbox,
+                    },
+                )
+            )
+            if count >= self.config.localized_red_block_flash_count:
+                reasons.append("LocalizedRedFlash")
 
         rapid_cut = self._detect_rapid_cut(monitor_id, previous, sampled)
         if rapid_cut:
@@ -101,7 +165,7 @@ class PhotosensitiveRiskDetector:
             events.append(sampled.timestamp)
             count = self._count_recent(events, sampled.timestamp)
             evidence.append(RiskEvidence("RapidCut", monitor_id, count, self.config.block_flash_count))
-            if count > self.config.block_flash_count:
+            if count >= self.config.block_flash_count:
                 reasons.append("RapidCut")
 
         if reasons:
@@ -111,6 +175,8 @@ class PhotosensitiveRiskDetector:
             self._count_recent(self._events_for(self._flash_events_by_monitor, monitor_id), sampled.timestamp),
             self._count_recent(self._events_for(self._red_events_by_monitor, monitor_id), sampled.timestamp),
             self._count_recent(self._events_for(self._rapid_events_by_monitor, monitor_id), sampled.timestamp),
+            self._count_recent(self._events_for(self._localized_flash_events_by_monitor, monitor_id), sampled.timestamp),
+            self._count_recent(self._events_for(self._localized_red_events_by_monitor, monitor_id), sampled.timestamp),
         ]
         if pattern_decision.level is RiskLevel.CAUTION or max(recent_counts) >= self.config.caution_flash_count:
             caution_reasons = list(pattern_decision.reasons)
@@ -128,6 +194,10 @@ class PhotosensitiveRiskDetector:
         self._flash_events_by_monitor.pop(monitor_id, None)
         self._red_events_by_monitor.pop(monitor_id, None)
         self._rapid_events_by_monitor.pop(monitor_id, None)
+        self._localized_flash_events_by_monitor.pop(monitor_id, None)
+        self._localized_red_events_by_monitor.pop(monitor_id, None)
+        self._localized_bbox_by_monitor.pop(monitor_id, None)
+        self._localized_red_bbox_by_monitor.pop(monitor_id, None)
         self._pattern_streak_by_monitor.pop(monitor_id, None)
 
     def reset_all(self) -> None:
@@ -138,6 +208,10 @@ class PhotosensitiveRiskDetector:
         self._flash_events_by_monitor.clear()
         self._red_events_by_monitor.clear()
         self._rapid_events_by_monitor.clear()
+        self._localized_flash_events_by_monitor.clear()
+        self._localized_red_events_by_monitor.clear()
+        self._localized_bbox_by_monitor.clear()
+        self._localized_red_bbox_by_monitor.clear()
         self._pattern_streak_by_monitor.clear()
 
     def _sample(self, frame: ScreenFrame) -> _SampledFrame:
@@ -170,9 +244,15 @@ class PhotosensitiveRiskDetector:
 
         return _SampledFrame(frame.timestamp, gw, gh, luma, red_ratio, red_saturated)
 
-    def _detect_general_flash_area(self, monitor_id: str, previous: _SampledFrame, current: _SampledFrame) -> float:
+    def _detect_general_flash_region(
+        self,
+        monitor_id: str,
+        previous: _SampledFrame,
+        current: _SampledFrame,
+    ) -> _FlashRegion:
         signs = self._cell_signs_by_monitor.setdefault(monitor_id, [0] * len(current.luma))
         pair_count = 0
+        toggled = [False] * len(current.luma)
         for index, (before, after) in enumerate(zip(previous.luma, current.luma)):
             delta = after - before
             if abs(delta) < self.config.general_luminance_delta:
@@ -182,12 +262,19 @@ class PhotosensitiveRiskDetector:
             sign = 1 if delta > 0 else -1
             if signs[index] and signs[index] != sign:
                 pair_count += 1
+                toggled[index] = True
             signs[index] = sign
-        return pair_count / len(current.luma)
+        return self._flash_region(pair_count, toggled, current.width, current.height)
 
-    def _detect_red_flash_area(self, monitor_id: str, previous: _SampledFrame, current: _SampledFrame) -> float:
+    def _detect_red_flash_region(
+        self,
+        monitor_id: str,
+        previous: _SampledFrame,
+        current: _SampledFrame,
+    ) -> _FlashRegion:
         signs = self._red_signs_by_monitor.setdefault(monitor_id, [0] * len(current.luma))
         pair_count = 0
+        toggled = [False] * len(current.luma)
         for index, (prev_ratio, curr_ratio) in enumerate(zip(previous.red_ratio, current.red_ratio)):
             red_transition = previous.red_saturated[index] or current.red_saturated[index]
             if not red_transition:
@@ -198,8 +285,102 @@ class PhotosensitiveRiskDetector:
             sign = 1 if delta > 0 else -1
             if signs[index] and signs[index] != sign:
                 pair_count += 1
+                toggled[index] = True
             signs[index] = sign
-        return pair_count / len(current.luma)
+        return self._flash_region(pair_count, toggled, current.width, current.height)
+
+    def _flash_region(self, pair_count: int, toggled: list[bool], width: int, height: int) -> _FlashRegion:
+        largest_count = 0
+        largest_bbox: tuple[int, int, int, int] | None = None
+        visited = [False] * len(toggled)
+
+        for start, is_toggled in enumerate(toggled):
+            if not is_toggled or visited[start]:
+                continue
+            stack = [start]
+            visited[start] = True
+            count = 0
+            min_x = max_x = start % width
+            min_y = max_y = start // width
+
+            while stack:
+                index = stack.pop()
+                count += 1
+                x = index % width
+                y = index // width
+                min_x = min(min_x, x)
+                max_x = max(max_x, x)
+                min_y = min(min_y, y)
+                max_y = max(max_y, y)
+                for neighbor in self._neighbors(index, x, y, width, height):
+                    if toggled[neighbor] and not visited[neighbor]:
+                        visited[neighbor] = True
+                        stack.append(neighbor)
+
+            if count > largest_count:
+                largest_count = count
+                largest_bbox = (min_x, min_y, max_x, max_y)
+
+        total = max(1, len(toggled))
+        if not largest_bbox:
+            return _FlashRegion(pair_count / total, 0.0, None, 0.0)
+        bbox_area = (largest_bbox[2] - largest_bbox[0] + 1) * (largest_bbox[3] - largest_bbox[1] + 1)
+        return _FlashRegion(
+            pair_count / total,
+            largest_count / total,
+            largest_bbox,
+            largest_count / max(1, bbox_area),
+        )
+
+    def _neighbors(self, index: int, x: int, y: int, width: int, height: int) -> tuple[int, ...]:
+        neighbors: list[int] = []
+        if x > 0:
+            neighbors.append(index - 1)
+        if x + 1 < width:
+            neighbors.append(index + 1)
+        if y > 0:
+            neighbors.append(index - width)
+        if y + 1 < height:
+            neighbors.append(index + width)
+        return tuple(neighbors)
+
+    def _is_localized_region(self, region: _FlashRegion, area_threshold: float) -> bool:
+        return (
+            region.largest_bbox is not None
+            and region.largest_area_ratio >= area_threshold
+            and region.largest_fill_ratio >= self.config.localized_region_fill_ratio
+        )
+
+    def _append_localized_event(
+        self,
+        event_map: dict[str, deque[float]],
+        bbox_map: dict[str, tuple[int, int, int, int]],
+        monitor_id: str,
+        timestamp: float,
+        bbox: tuple[int, int, int, int] | None,
+    ) -> int:
+        events = self._events_for(event_map, monitor_id)
+        if bbox is None:
+            return self._count_recent(events, timestamp)
+
+        previous_bbox = bbox_map.get(monitor_id)
+        if previous_bbox is not None and self._bbox_iou(previous_bbox, bbox) < self.config.localized_bbox_overlap_ratio:
+            events.clear()
+        bbox_map[monitor_id] = bbox
+        events.append(timestamp)
+        return self._count_recent(events, timestamp)
+
+    def _bbox_iou(self, left: tuple[int, int, int, int], right: tuple[int, int, int, int]) -> float:
+        x1 = max(left[0], right[0])
+        y1 = max(left[1], right[1])
+        x2 = min(left[2], right[2])
+        y2 = min(left[3], right[3])
+        if x2 < x1 or y2 < y1:
+            return 0.0
+        intersection = (x2 - x1 + 1) * (y2 - y1 + 1)
+        left_area = (left[2] - left[0] + 1) * (left[3] - left[1] + 1)
+        right_area = (right[2] - right[0] + 1) * (right[3] - right[1] + 1)
+        return intersection / max(1, left_area + right_area - intersection)
 
     def _detect_rapid_cut(self, monitor_id: str, previous: _SampledFrame, current: _SampledFrame) -> bool:
         changed = 0
