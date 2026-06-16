@@ -9,7 +9,7 @@ content looks unsafe.
 This is an early clinical-assistive prototype. It implements:
 
 - Native Windows screenshot capture through Win32 APIs.
-- Downscaled analysis capture for faster detection latency.
+- Low-resolution 40 FPS analysis capture for faster detection latency.
 - Guideline-inspired detection for large-area luminance flashes, saturated red
   flashes, localized windowed flashes, rapid cuts, and high-contrast regular
   patterns.
@@ -36,6 +36,19 @@ Analyze one frame per monitor without starting the shield:
 python -m epilepsy_guard --once
 ```
 
+Measure actual Windows capture speed on the PC:
+
+```powershell
+python -m epilepsy_guard --benchmark-capture
+```
+
+Estimate live block latency for synthetic risky scenarios without displaying
+flashing content:
+
+```powershell
+python -m epilepsy_guard --benchmark-latency
+```
+
 Print a full example config:
 
 ```powershell
@@ -60,6 +73,7 @@ Run safe synthetic detector checks without displaying flashing content:
 python -m epilepsy_guard --simulate safe-browser
 python -m epilepsy_guard --simulate general-flash
 python -m epilepsy_guard --simulate windowed-flash
+python -m epilepsy_guard --simulate small-windowed-flash
 python -m epilepsy_guard --simulate red-flash
 python -m epilepsy_guard --simulate regular-pattern
 ```
@@ -69,6 +83,7 @@ Show the black shield briefly only after a synthetic risky sequence is detected:
 ```powershell
 python -m epilepsy_guard --simulate general-flash --simulate-shield --duration 2
 python -m epilepsy_guard --simulate windowed-flash --simulate-shield --duration 2
+python -m epilepsy_guard --simulate small-windowed-flash --simulate-shield --duration 2
 ```
 
 The shield also auto-releases after the configured `max_blackout_seconds`

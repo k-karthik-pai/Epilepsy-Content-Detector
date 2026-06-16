@@ -31,6 +31,8 @@ class _FlashRegion:
     largest_area_ratio: float
     largest_bbox: tuple[int, int, int, int] | None
     largest_fill_ratio: float
+    largest_width_ratio: float
+    largest_height_ratio: float
 
 
 class PhotosensitiveRiskDetector:
@@ -180,9 +182,10 @@ class PhotosensitiveRiskDetector:
         ]
         if pattern_decision.level is RiskLevel.CAUTION or max(recent_counts) >= self.config.caution_flash_count:
             caution_reasons = list(pattern_decision.reasons)
+            caution_evidence = [*pattern_decision.evidence, *evidence]
             if max(recent_counts) >= self.config.caution_flash_count:
                 caution_reasons.append("FlashSequenceBuilding")
-            return RiskDecision(RiskLevel.CAUTION, tuple(sorted(set(caution_reasons))), tuple(evidence))
+            return RiskDecision(RiskLevel.CAUTION, tuple(sorted(set(caution_reasons))), tuple(caution_evidence))
 
         return RiskDecision.safe()
 
@@ -323,13 +326,17 @@ class PhotosensitiveRiskDetector:
 
         total = max(1, len(toggled))
         if not largest_bbox:
-            return _FlashRegion(pair_count / total, 0.0, None, 0.0)
-        bbox_area = (largest_bbox[2] - largest_bbox[0] + 1) * (largest_bbox[3] - largest_bbox[1] + 1)
+            return _FlashRegion(pair_count / total, 0.0, None, 0.0, 0.0, 0.0)
+        bbox_width = largest_bbox[2] - largest_bbox[0] + 1
+        bbox_height = largest_bbox[3] - largest_bbox[1] + 1
+        bbox_area = bbox_width * bbox_height
         return _FlashRegion(
             pair_count / total,
             largest_count / total,
             largest_bbox,
             largest_count / max(1, bbox_area),
+            bbox_width / max(1, width),
+            bbox_height / max(1, height),
         )
 
     def _neighbors(self, index: int, x: int, y: int, width: int, height: int) -> tuple[int, ...]:
@@ -349,6 +356,7 @@ class PhotosensitiveRiskDetector:
             region.largest_bbox is not None
             and region.largest_area_ratio >= area_threshold
             and region.largest_fill_ratio >= self.config.localized_region_fill_ratio
+            and max(region.largest_width_ratio, region.largest_height_ratio) <= self.config.localized_max_span_ratio
         )
 
     def _append_localized_event(
@@ -364,8 +372,11 @@ class PhotosensitiveRiskDetector:
             return self._count_recent(events, timestamp)
 
         previous_bbox = bbox_map.get(monitor_id)
-        if previous_bbox is not None and self._bbox_iou(previous_bbox, bbox) < self.config.localized_bbox_overlap_ratio:
-            events.clear()
+        if previous_bbox is not None:
+            stable_overlap = self._bbox_iou(previous_bbox, bbox) >= self.config.localized_bbox_overlap_ratio
+            stable_area = self._bbox_area_similarity(previous_bbox, bbox) >= self.config.localized_bbox_min_area_similarity
+            if not stable_overlap or not stable_area:
+                events.clear()
         bbox_map[monitor_id] = bbox
         events.append(timestamp)
         return self._count_recent(events, timestamp)
@@ -381,6 +392,11 @@ class PhotosensitiveRiskDetector:
         left_area = (left[2] - left[0] + 1) * (left[3] - left[1] + 1)
         right_area = (right[2] - right[0] + 1) * (right[3] - right[1] + 1)
         return intersection / max(1, left_area + right_area - intersection)
+
+    def _bbox_area_similarity(self, left: tuple[int, int, int, int], right: tuple[int, int, int, int]) -> float:
+        left_area = (left[2] - left[0] + 1) * (left[3] - left[1] + 1)
+        right_area = (right[2] - right[0] + 1) * (right[3] - right[1] + 1)
+        return min(left_area, right_area) / max(1, left_area, right_area)
 
     def _detect_rapid_cut(self, monitor_id: str, previous: _SampledFrame, current: _SampledFrame) -> bool:
         changed = 0

@@ -5,7 +5,7 @@ import queue
 import time
 from dataclasses import dataclass
 
-from epilepsy_guard.app import EpilepsyGuardApp
+from epilepsy_guard.app import EpilepsyGuardApp, _scenario_latency
 from epilepsy_guard.models import AppConfig, Monitor, RiskDecision, RiskLevel, ScreenFrame
 
 
@@ -149,6 +149,28 @@ class AppRoutingTests(unittest.TestCase):
         app.detector = FakeDetector(decision)
         app._capture_once()
         self.assertEqual(app._events.get_nowait(), decision)
+
+    def test_ui_tick_prioritizes_block_decisions(self) -> None:
+        app, _shield, _logger = app_with_fakes()
+        handled: list[RiskLevel] = []
+
+        def record_decision(decision: RiskDecision) -> None:
+            handled.append(decision.level)
+
+        app._handle_decision = record_decision  # type: ignore[method-assign]
+        for _ in range(25):
+            app._events.put(RiskDecision.safe())
+        app._events.put(RiskDecision(RiskLevel.BLOCK, ("GeneralFlash",)))
+        app._events.put(RiskDecision(RiskLevel.CAUTION, ("RegularPattern",)))
+        app._ui_tick()
+        self.assertEqual(handled[0], RiskLevel.BLOCK)
+        self.assertEqual(len(handled), 27)
+
+    def test_scenario_latency_estimates_windowed_block(self) -> None:
+        result = _scenario_latency(AppConfig(), "small-windowed-flash", measured_fps=20.0)
+        self.assertTrue(result["blocks"])
+        self.assertEqual(result["reasons"], ["LocalizedFlash"])
+        self.assertLessEqual(result["estimated_live_ms_at_measured_capture_fps"], 250.0)
 
     def test_expired_shield_releases_even_without_capture_exclusion(self) -> None:
         app, shield, logger = app_with_fakes()

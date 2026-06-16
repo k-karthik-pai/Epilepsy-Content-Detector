@@ -32,9 +32,9 @@ class ScreenFrame:
 
 @dataclass
 class DetectorConfig:
-    sample_fps: float = 30.0
-    grid_width: int = 96
-    grid_height: int = 54
+    sample_fps: float = 40.0
+    grid_width: int = 40
+    grid_height: int = 24
     flash_window_seconds: float = 1.0
     safe_release_seconds: float = 2.0
     blackout_hold_seconds: float = 2.5
@@ -48,12 +48,14 @@ class DetectorConfig:
     red_flash_area_ratio: float = 0.20
     severe_flash_area_ratio: float = 0.85
     severe_block_flash_count: int = 2
-    localized_flash_area_ratio: float = 0.15
+    localized_flash_area_ratio: float = 0.08
     localized_red_flash_area_ratio: float = 0.08
     localized_block_flash_count: int = 3
     localized_red_block_flash_count: int = 3
     localized_region_fill_ratio: float = 0.45
     localized_bbox_overlap_ratio: float = 0.50
+    localized_bbox_min_area_similarity: float = 0.80
+    localized_max_span_ratio: float = 0.95
     rapid_cut_area_ratio: float = 0.70
     rapid_cut_delta: float = 0.20
     pattern_stationary_area_ratio: float = 0.85
@@ -63,7 +65,7 @@ class DetectorConfig:
     pattern_confirm_frames: int = 2
     auto_release_requires_capture_exclusion: bool = False
     max_blackout_seconds: float = 5.0
-    ui_tick_ms: int = 15
+    ui_tick_ms: int = 5
     manual_unlock_hold_seconds: float = 2.0
     manual_unlock_snooze_seconds: float = 10.0
 

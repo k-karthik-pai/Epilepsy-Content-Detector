@@ -120,6 +120,105 @@ def capture_bgra(monitor: Monitor) -> bytes:
     return capture_bgra_scaled(monitor, monitor.width, monitor.height)
 
 
+class ScaledCaptureSession:
+    def __init__(self, monitor: Monitor, width: int, height: int):
+        self._monitor = monitor
+        self._width = width
+        self._height = height
+        self._screen_dc = None
+        self._memory_dc = None
+        self._bitmap = None
+        self._old_bitmap = None
+        self._closed = False
+
+        source_width = monitor.width
+        source_height = monitor.height
+        if source_width <= 0 or source_height <= 0 or width <= 0 or height <= 0:
+            raise ValueError(f"Invalid monitor dimensions: {monitor}")
+
+        self._screen_dc = user32.GetDC(None)
+        if not self._screen_dc:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            self._memory_dc = gdi32.CreateCompatibleDC(self._screen_dc)
+            if not self._memory_dc:
+                raise ctypes.WinError(ctypes.get_last_error())
+            self._bitmap = gdi32.CreateCompatibleBitmap(self._screen_dc, width, height)
+            if not self._bitmap:
+                raise ctypes.WinError(ctypes.get_last_error())
+            self._old_bitmap = gdi32.SelectObject(self._memory_dc, self._bitmap)
+            if not self._old_bitmap:
+                raise ctypes.WinError(ctypes.get_last_error())
+
+            gdi32.SetStretchBltMode(self._memory_dc, COLORONCOLOR)
+            self._bitmap_info = BITMAPINFO()
+            self._bitmap_info.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+            self._bitmap_info.bmiHeader.biWidth = width
+            self._bitmap_info.bmiHeader.biHeight = -height
+            self._bitmap_info.bmiHeader.biPlanes = 1
+            self._bitmap_info.bmiHeader.biBitCount = 32
+            self._bitmap_info.bmiHeader.biCompression = BI_RGB
+            self._buffer = (ctypes.c_ubyte * (width * height * 4))()
+        except Exception:
+            self.close()
+            raise
+
+    @property
+    def monitor(self) -> Monitor:
+        return self._monitor
+
+    def capture(self) -> bytes:
+        if self._closed:
+            raise RuntimeError("Capture session is closed.")
+        if not gdi32.StretchBlt(
+            self._memory_dc,
+            0,
+            0,
+            self._width,
+            self._height,
+            self._screen_dc,
+            self._monitor.left,
+            self._monitor.top,
+            self._monitor.width,
+            self._monitor.height,
+            SRCCOPY | CAPTUREBLT,
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        scan_lines = gdi32.GetDIBits(
+            self._memory_dc,
+            self._bitmap,
+            0,
+            self._height,
+            ctypes.byref(self._buffer),
+            ctypes.byref(self._bitmap_info),
+            DIB_RGB_COLORS,
+        )
+        if scan_lines != self._height:
+            raise ctypes.WinError(ctypes.get_last_error())
+        return bytes(self._buffer)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._old_bitmap and self._memory_dc:
+            gdi32.SelectObject(self._memory_dc, self._old_bitmap)
+            self._old_bitmap = None
+        if self._bitmap:
+            gdi32.DeleteObject(self._bitmap)
+            self._bitmap = None
+        if self._memory_dc:
+            gdi32.DeleteDC(self._memory_dc)
+            self._memory_dc = None
+        if self._screen_dc:
+            user32.ReleaseDC(None, self._screen_dc)
+            self._screen_dc = None
+
+    def __del__(self) -> None:
+        self.close()
+
+
 def capture_bgra_scaled(monitor: Monitor, width: int, height: int) -> bytes:
     source_width = monitor.width
     source_height = monitor.height

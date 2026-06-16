@@ -66,14 +66,26 @@ def windowed_flash_frame(
     lit: bool,
     width: int = 160,
     height: int = 90,
+    window_width_ratio: float = 0.50,
+    window_height_ratio: float = 0.50,
+    left_ratio: float | None = None,
+    top_ratio: float | None = None,
 ) -> ScreenFrame:
     dark = bytes((0, 0, 0, 255))
     light = bytes((255, 255, 255, 255))
     data = bytearray(bytes((32, 32, 32, 255)) * width * height)
-    window_width = width // 2
-    window_height = height // 2
-    start_x = (width - window_width) // 2
-    start_y = (height - window_height) // 2
+    window_width = max(1, min(width, int(width * window_width_ratio)))
+    window_height = max(1, min(height, int(height * window_height_ratio)))
+    if left_ratio is None:
+        start_x = (width - window_width) // 2
+    else:
+        start_x = int((width - window_width) * left_ratio)
+    if top_ratio is None:
+        start_y = (height - window_height) // 2
+    else:
+        start_y = int((height - window_height) * top_ratio)
+    start_x = max(0, min(width - window_width, start_x))
+    start_y = max(0, min(height - window_height, start_y))
     pixel = light if lit else dark
     for y in range(start_y, start_y + window_height):
         for x in range(start_x, start_x + window_width):
@@ -118,6 +130,18 @@ def scenario_frames(name: str, sample_fps: float = 12.0) -> Iterable[ScreenFrame
             yield windowed_flash_frame(index * step, bool(index % 2))
         return
 
+    if name == "small-windowed-flash":
+        for index in range(12):
+            yield windowed_flash_frame(
+                index * step,
+                bool(index % 2),
+                window_width_ratio=0.35,
+                window_height_ratio=0.35,
+                left_ratio=0.82,
+                top_ratio=0.68,
+            )
+        return
+
     if name == "red-flash":
         colors = [(0, 0, 0), (255, 0, 0)] * 6
         for index, color in enumerate(colors):
@@ -137,6 +161,7 @@ def scenario_names() -> tuple[str, ...]:
         "partial-pattern",
         "general-flash",
         "windowed-flash",
+        "small-windowed-flash",
         "red-flash",
         "regular-pattern",
     )

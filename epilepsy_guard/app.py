@@ -82,11 +82,14 @@ class EpilepsyGuardApp:
         self.shield.poll_emergency_unlock()
         self._release_expired_shield(now)
 
+        pending: list[RiskDecision] = []
         while True:
             try:
-                decision = self._events.get_nowait()
+                pending.append(self._events.get_nowait())
             except queue.Empty:
                 break
+        pending.sort(key=lambda decision: decision.level is not RiskLevel.BLOCK)
+        for decision in pending:
             self._handle_decision(decision)
 
         self.shield.root.after(self.config.detector.ui_tick_ms, self._ui_tick)
@@ -145,12 +148,104 @@ class EpilepsyGuardApp:
 
 def run_once(config: AppConfig) -> int:
     capture = ScreenCapture(config.detector.grid_width, config.detector.grid_height)
-    detector = PhotosensitiveRiskDetector(config.detector)
     decisions: list[RiskDecision] = []
-    for frame in capture.capture_all():
-        decisions.append(detector.analyze(frame))
+    try:
+        detector = PhotosensitiveRiskDetector(config.detector)
+        for frame in capture.capture_all():
+            decisions.append(detector.analyze(frame))
+    finally:
+        capture.close()
     print(json.dumps([_decision_to_dict(item) for item in decisions], indent=2))
     return 0 if all(item.level is RiskLevel.SAFE for item in decisions) else 2
+
+
+def benchmark_capture(config: AppConfig, frame_count: int = 60) -> int:
+    result = _measure_capture(config, frame_count)
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+def benchmark_latency(config: AppConfig, frame_count: int = 60) -> int:
+    capture_result = _measure_capture(config, frame_count)
+    measured_fps = float(capture_result["measured_fps"])
+    scenarios = [
+        _scenario_latency(config, scenario, measured_fps)
+        for scenario in ("general-flash", "windowed-flash", "small-windowed-flash", "red-flash")
+    ]
+    print(
+        json.dumps(
+            {
+                "capture": capture_result,
+                "scenarios": scenarios,
+                "note": "Estimates use synthetic frames; they do not display flashing content.",
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _measure_capture(config: AppConfig, frame_count: int = 60) -> dict[str, object]:
+    capture = ScreenCapture(config.detector.grid_width, config.detector.grid_height)
+    durations: list[float] = []
+    try:
+        for _ in range(max(1, frame_count)):
+            started = time.perf_counter()
+            capture.capture_all()
+            durations.append(time.perf_counter() - started)
+    finally:
+        capture.close()
+
+    total_frames = len(durations) * max(1, len(capture.monitors))
+    total_seconds = sum(durations)
+    mean_seconds = total_seconds / max(1, len(durations))
+    result = {
+        "monitors": len(capture.monitors),
+        "captures": len(durations),
+        "analysis_size": {
+            "width": config.detector.grid_width,
+            "height": config.detector.grid_height,
+        },
+        "target_fps": config.detector.sample_fps,
+        "measured_fps": round(total_frames / total_seconds, 2) if total_seconds else 0.0,
+        "mean_capture_ms": round(mean_seconds * 1000, 2),
+        "min_capture_ms": round(min(durations) * 1000, 2),
+        "max_capture_ms": round(max(durations) * 1000, 2),
+    }
+    return result
+
+
+def _scenario_latency(config: AppConfig, scenario: str, measured_fps: float) -> dict[str, object]:
+    detector = PhotosensitiveRiskDetector(config.detector)
+    first_block_index: int | None = None
+    first_block_timestamp: float | None = None
+    first_block_reasons: tuple[str, ...] = ()
+    for index, frame in enumerate(scenario_frames(scenario, config.detector.sample_fps)):
+        decision = detector.analyze(frame)
+        if decision.level is RiskLevel.BLOCK:
+            first_block_index = index
+            first_block_timestamp = frame.timestamp
+            first_block_reasons = decision.reasons
+            break
+
+    if first_block_index is None:
+        return {
+            "scenario": scenario,
+            "blocks": False,
+        }
+
+    estimated_live_ms = None
+    if measured_fps > 0:
+        estimated_live_ms = round((first_block_index / measured_fps) * 1000 + config.detector.ui_tick_ms, 2)
+
+    return {
+        "scenario": scenario,
+        "blocks": True,
+        "first_block_frame_index": first_block_index,
+        "synthetic_time_ms": round((first_block_timestamp or 0.0) * 1000, 2),
+        "estimated_live_ms_at_measured_capture_fps": estimated_live_ms,
+        "reasons": list(first_block_reasons),
+    }
 
 
 def run_simulation(
@@ -208,6 +303,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", help="Path to JSON config file.")
     parser.add_argument("--once", action="store_true", help="Analyze one screenshot per monitor and exit.")
     parser.add_argument(
+        "--benchmark-capture",
+        action="store_true",
+        help="Measure real screen capture speed without showing the shield.",
+    )
+    parser.add_argument(
+        "--benchmark-latency",
+        action="store_true",
+        help="Estimate live block latency from measured capture FPS and synthetic risky scenarios.",
+    )
+    parser.add_argument(
+        "--benchmark-frames",
+        type=int,
+        default=60,
+        help="Number of capture iterations for --benchmark-capture.",
+    )
+    parser.add_argument(
         "--monitor-only",
         action="store_true",
         help="Log/print detections without showing the blackout shield. Not recommended for patient use.",
@@ -239,6 +350,10 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config(args.config)
     if args.monitor_only:
         config.monitor_only = True
+    if args.benchmark_capture:
+        return benchmark_capture(config, args.benchmark_frames)
+    if args.benchmark_latency:
+        return benchmark_latency(config, args.benchmark_frames)
     if args.simulate:
         shield_seconds = args.duration if args.duration is not None else 2.0
         return run_simulation(config, args.simulate, args.simulate_shield, shield_seconds)
