@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "epilepsy-guard"
 version = "0.1.0"
@@ -5,6 +9,8 @@ description = "Windows desktop photosensitive-epilepsy content detector with ins
 requires-python = ">=3.11"
 dependencies = []
 
+[project.scripts]
+epilepsy-guard = "epilepsy_guard.app:main"
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
-

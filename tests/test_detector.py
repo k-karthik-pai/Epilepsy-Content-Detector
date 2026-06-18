@@ -238,6 +238,17 @@ class DetectorTests(unittest.TestCase):
         )
         self.assertLessEqual(first_block / 40, 0.125)
 
+    def test_stopped_windowed_flash_returns_to_safe_without_stale_caution(self) -> None:
+        detector = PhotosensitiveRiskDetector(self.config())
+        decisions = [
+            detector.analyze(windowed_flash_frame(index / 40, bool(index % 2)))
+            for index in range(5)
+        ]
+        self.assertEqual(decisions[-1].level, RiskLevel.BLOCK)
+
+        stopped = detector.analyze(windowed_flash_frame(5 / 40, False))
+        self.assertEqual(stopped.level, RiskLevel.SAFE)
+
     def test_small_off_center_windowed_flash_blocks(self) -> None:
         detector = PhotosensitiveRiskDetector(self.config())
         decisions = [
@@ -257,7 +268,7 @@ class DetectorTests(unittest.TestCase):
         self.assertIn("LocalizedFlash", decisions[-1].reasons)
 
     def test_synthetic_safe_scenarios_do_not_block(self) -> None:
-        for scenario in ("safe-browser", "partial-pattern"):
+        for scenario in ("safe-browser", "safe-tab-switch", "partial-pattern"):
             with self.subTest(scenario=scenario):
                 detector = PhotosensitiveRiskDetector(self.config())
                 decisions = [detector.analyze(frame) for frame in scenario_frames(scenario, 12.0)]

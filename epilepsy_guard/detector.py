@@ -33,6 +33,8 @@ class _FlashRegion:
     largest_fill_ratio: float
     largest_width_ratio: float
     largest_height_ratio: float
+    overall_polarity_ratio: float
+    largest_polarity_ratio: float
 
 
 class PhotosensitiveRiskDetector:
@@ -76,7 +78,10 @@ class PhotosensitiveRiskDetector:
         reasons: list[str] = []
 
         general_region = self._detect_general_flash_region(monitor_id, previous, sampled)
-        if general_region.area_ratio >= self.config.flash_area_ratio:
+        if (
+            general_region.area_ratio >= self.config.flash_area_ratio
+            and general_region.overall_polarity_ratio >= self.config.flash_polarity_coherence_ratio
+        ):
             events = self._events_for(self._flash_events_by_monitor, monitor_id)
             events.append(sampled.timestamp)
             count = self._count_recent(events, sampled.timestamp)
@@ -86,7 +91,10 @@ class PhotosensitiveRiskDetector:
                     monitor_id,
                     count,
                     self.config.block_flash_count,
-                    {"affected_area_ratio": round(general_region.area_ratio, 4)},
+                    {
+                        "affected_area_ratio": round(general_region.area_ratio, 4),
+                        "polarity_coherence_ratio": round(general_region.overall_polarity_ratio, 4),
+                    },
                 )
             )
             if (
@@ -114,6 +122,7 @@ class PhotosensitiveRiskDetector:
                     {
                         "affected_area_ratio": round(general_region.area_ratio, 4),
                         "localized_area_ratio": round(general_region.largest_area_ratio, 4),
+                        "polarity_coherence_ratio": round(general_region.largest_polarity_ratio, 4),
                         "bbox": general_region.largest_bbox,
                     },
                 )
@@ -122,7 +131,10 @@ class PhotosensitiveRiskDetector:
                 reasons.append("LocalizedFlash")
 
         red_region = self._detect_red_flash_region(monitor_id, previous, sampled)
-        if red_region.area_ratio >= self.config.red_flash_area_ratio:
+        if (
+            red_region.area_ratio >= self.config.red_flash_area_ratio
+            and red_region.overall_polarity_ratio >= self.config.flash_polarity_coherence_ratio
+        ):
             events = self._events_for(self._red_events_by_monitor, monitor_id)
             events.append(sampled.timestamp)
             count = self._count_recent(events, sampled.timestamp)
@@ -132,7 +144,10 @@ class PhotosensitiveRiskDetector:
                     monitor_id,
                     count,
                     self.config.block_flash_count,
-                    {"affected_area_ratio": round(red_region.area_ratio, 4)},
+                    {
+                        "affected_area_ratio": round(red_region.area_ratio, 4),
+                        "polarity_coherence_ratio": round(red_region.overall_polarity_ratio, 4),
+                    },
                 )
             )
             if count >= self.config.block_flash_count:
@@ -154,6 +169,7 @@ class PhotosensitiveRiskDetector:
                     {
                         "affected_area_ratio": round(red_region.area_ratio, 4),
                         "localized_area_ratio": round(red_region.largest_area_ratio, 4),
+                        "polarity_coherence_ratio": round(red_region.largest_polarity_ratio, 4),
                         "bbox": red_region.largest_bbox,
                     },
                 )
@@ -180,10 +196,11 @@ class PhotosensitiveRiskDetector:
             self._count_recent(self._events_for(self._localized_flash_events_by_monitor, monitor_id), sampled.timestamp),
             self._count_recent(self._events_for(self._localized_red_events_by_monitor, monitor_id), sampled.timestamp),
         ]
-        if pattern_decision.level is RiskLevel.CAUTION or max(recent_counts) >= self.config.caution_flash_count:
+        sequence_building = bool(evidence) and max(recent_counts) >= self.config.caution_flash_count
+        if pattern_decision.level is RiskLevel.CAUTION or sequence_building:
             caution_reasons = list(pattern_decision.reasons)
             caution_evidence = [*pattern_decision.evidence, *evidence]
-            if max(recent_counts) >= self.config.caution_flash_count:
+            if sequence_building:
                 caution_reasons.append("FlashSequenceBuilding")
             return RiskDecision(RiskLevel.CAUTION, tuple(sorted(set(caution_reasons))), tuple(caution_evidence))
 
@@ -255,7 +272,7 @@ class PhotosensitiveRiskDetector:
     ) -> _FlashRegion:
         signs = self._cell_signs_by_monitor.setdefault(monitor_id, [0] * len(current.luma))
         pair_count = 0
-        toggled = [False] * len(current.luma)
+        transition_signs = [0] * len(current.luma)
         for index, (before, after) in enumerate(zip(previous.luma, current.luma)):
             delta = after - before
             if abs(delta) < self.config.general_luminance_delta:
@@ -265,9 +282,9 @@ class PhotosensitiveRiskDetector:
             sign = 1 if delta > 0 else -1
             if signs[index] and signs[index] != sign:
                 pair_count += 1
-                toggled[index] = True
+                transition_signs[index] = sign
             signs[index] = sign
-        return self._flash_region(pair_count, toggled, current.width, current.height)
+        return self._flash_region(pair_count, transition_signs, current.width, current.height)
 
     def _detect_red_flash_region(
         self,
@@ -277,7 +294,7 @@ class PhotosensitiveRiskDetector:
     ) -> _FlashRegion:
         signs = self._red_signs_by_monitor.setdefault(monitor_id, [0] * len(current.luma))
         pair_count = 0
-        toggled = [False] * len(current.luma)
+        transition_signs = [0] * len(current.luma)
         for index, (prev_ratio, curr_ratio) in enumerate(zip(previous.red_ratio, current.red_ratio)):
             red_transition = previous.red_saturated[index] or current.red_saturated[index]
             if not red_transition:
@@ -288,27 +305,34 @@ class PhotosensitiveRiskDetector:
             sign = 1 if delta > 0 else -1
             if signs[index] and signs[index] != sign:
                 pair_count += 1
-                toggled[index] = True
+                transition_signs[index] = sign
             signs[index] = sign
-        return self._flash_region(pair_count, toggled, current.width, current.height)
+        return self._flash_region(pair_count, transition_signs, current.width, current.height)
 
-    def _flash_region(self, pair_count: int, toggled: list[bool], width: int, height: int) -> _FlashRegion:
+    def _flash_region(self, pair_count: int, transition_signs: list[int], width: int, height: int) -> _FlashRegion:
         largest_count = 0
         largest_bbox: tuple[int, int, int, int] | None = None
-        visited = [False] * len(toggled)
+        largest_polarity_ratio = 0.0
+        visited = [False] * len(transition_signs)
 
-        for start, is_toggled in enumerate(toggled):
-            if not is_toggled or visited[start]:
+        for start, transition_sign in enumerate(transition_signs):
+            if not transition_sign or visited[start]:
                 continue
             stack = [start]
             visited[start] = True
             count = 0
+            positive_count = 0
+            negative_count = 0
             min_x = max_x = start % width
             min_y = max_y = start // width
 
             while stack:
                 index = stack.pop()
                 count += 1
+                if transition_signs[index] > 0:
+                    positive_count += 1
+                else:
+                    negative_count += 1
                 x = index % width
                 y = index // width
                 min_x = min(min_x, x)
@@ -316,17 +340,21 @@ class PhotosensitiveRiskDetector:
                 min_y = min(min_y, y)
                 max_y = max(max_y, y)
                 for neighbor in self._neighbors(index, x, y, width, height):
-                    if toggled[neighbor] and not visited[neighbor]:
+                    if transition_signs[neighbor] and not visited[neighbor]:
                         visited[neighbor] = True
                         stack.append(neighbor)
 
             if count > largest_count:
                 largest_count = count
                 largest_bbox = (min_x, min_y, max_x, max_y)
+                largest_polarity_ratio = max(positive_count, negative_count) / count
 
-        total = max(1, len(toggled))
+        total = max(1, len(transition_signs))
+        positive_total = sum(1 for sign in transition_signs if sign > 0)
+        negative_total = sum(1 for sign in transition_signs if sign < 0)
+        overall_polarity_ratio = max(positive_total, negative_total) / pair_count if pair_count else 0.0
         if not largest_bbox:
-            return _FlashRegion(pair_count / total, 0.0, None, 0.0, 0.0, 0.0)
+            return _FlashRegion(pair_count / total, 0.0, None, 0.0, 0.0, 0.0, 0.0, 0.0)
         bbox_width = largest_bbox[2] - largest_bbox[0] + 1
         bbox_height = largest_bbox[3] - largest_bbox[1] + 1
         bbox_area = bbox_width * bbox_height
@@ -337,6 +365,8 @@ class PhotosensitiveRiskDetector:
             largest_count / max(1, bbox_area),
             bbox_width / max(1, width),
             bbox_height / max(1, height),
+            overall_polarity_ratio,
+            largest_polarity_ratio,
         )
 
     def _neighbors(self, index: int, x: int, y: int, width: int, height: int) -> tuple[int, ...]:
@@ -356,6 +386,7 @@ class PhotosensitiveRiskDetector:
             region.largest_bbox is not None
             and region.largest_area_ratio >= area_threshold
             and region.largest_fill_ratio >= self.config.localized_region_fill_ratio
+            and region.largest_polarity_ratio >= self.config.localized_polarity_coherence_ratio
             and max(region.largest_width_ratio, region.largest_height_ratio) <= self.config.localized_max_span_ratio
         )
 
@@ -408,6 +439,12 @@ class PhotosensitiveRiskDetector:
                 deltas.append(delta)
         area = changed / len(current.luma)
         if area < self.config.rapid_cut_area_ratio or not deltas:
+            return False
+
+        positive_count = sum(1 for delta in deltas if delta > 0)
+        negative_count = len(deltas) - positive_count
+        polarity_ratio = max(positive_count, negative_count) / len(deltas)
+        if polarity_ratio < self.config.rapid_cut_polarity_coherence_ratio:
             return False
 
         mean_delta = fmean(deltas)

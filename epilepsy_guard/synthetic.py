@@ -40,6 +40,40 @@ def browser_like_frame(timestamp: float, width: int = 160, height: int = 90) -> 
     return ScreenFrame(SYNTHETIC_MONITOR, timestamp, width, height, bytes(data))
 
 
+def tab_switch_frame(
+    timestamp: float,
+    alternate: bool,
+    width: int = 160,
+    height: int = 90,
+) -> ScreenFrame:
+    background = bytes((245, 245, 245, 255))
+    toolbar = bytes((220, 220, 220, 255))
+    light = bytes((245, 245, 245, 255))
+    dark = bytes((35, 35, 35, 255))
+    data = bytearray(background * width * height)
+
+    toolbar_height = max(1, height // 7)
+    for y in range(toolbar_height):
+        for x in range(width):
+            offset = (y * width + x) * 4
+            data[offset : offset + 4] = toolbar
+
+    start_x = width // 5
+    end_x = width - start_x
+    start_y = height // 4
+    end_y = height - height // 6
+    mid_x = (start_x + end_x) // 2
+    mid_y = (start_y + end_y) // 2
+    for y in range(start_y, end_y):
+        for x in range(start_x, end_x):
+            diagonal = (x < mid_x) == (y < mid_y)
+            lit = diagonal != alternate
+            pixel = light if lit else dark
+            offset = (y * width + x) * 4
+            data[offset : offset + 4] = pixel
+    return ScreenFrame(SYNTHETIC_MONITOR, timestamp, width, height, bytes(data))
+
+
 def partial_stripes_frame(
     timestamp: float,
     inverted: bool = False,
@@ -113,6 +147,11 @@ def scenario_frames(name: str, sample_fps: float = 12.0) -> Iterable[ScreenFrame
         yield solid_frame(step * 4, (250, 250, 250))
         return
 
+    if name == "safe-tab-switch":
+        for index in range(10):
+            yield tab_switch_frame(index * step, bool(index % 2))
+        return
+
     if name == "partial-pattern":
         yield solid_frame(0.0, (34, 34, 34))
         yield partial_stripes_frame(step)
@@ -158,6 +197,7 @@ def scenario_frames(name: str, sample_fps: float = 12.0) -> Iterable[ScreenFrame
 def scenario_names() -> tuple[str, ...]:
     return (
         "safe-browser",
+        "safe-tab-switch",
         "partial-pattern",
         "general-flash",
         "windowed-flash",

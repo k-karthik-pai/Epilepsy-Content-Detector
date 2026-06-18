@@ -48,16 +48,19 @@ class DetectorConfig:
     red_flash_area_ratio: float = 0.20
     severe_flash_area_ratio: float = 0.85
     severe_block_flash_count: int = 2
+    flash_polarity_coherence_ratio: float = 0.75
     localized_flash_area_ratio: float = 0.08
     localized_red_flash_area_ratio: float = 0.08
     localized_block_flash_count: int = 3
     localized_red_block_flash_count: int = 3
     localized_region_fill_ratio: float = 0.45
+    localized_polarity_coherence_ratio: float = 0.80
     localized_bbox_overlap_ratio: float = 0.50
     localized_bbox_min_area_similarity: float = 0.80
     localized_max_span_ratio: float = 0.95
     rapid_cut_area_ratio: float = 0.70
     rapid_cut_delta: float = 0.20
+    rapid_cut_polarity_coherence_ratio: float = 0.75
     pattern_stationary_area_ratio: float = 0.85
     pattern_motion_area_ratio: float = 0.55
     pattern_min_pairs: int = 6
@@ -75,6 +78,14 @@ class AppConfig:
     detector: DetectorConfig = field(default_factory=DetectorConfig)
     log_path: str | None = None
     monitor_only: bool = False
+    capture_backend: str = "gdi"
+    log_max_bytes: int = 1_000_000
+    log_backup_count: int = 5
+    monitor_refresh_seconds: float = 2.0
+    detector_rearm_seconds: float = 0.15
+    capture_recovery_error_threshold: int = 3
+    capture_error_backoff_seconds: float = 0.25
+    decision_queue_size: int = 256
 
 
 @dataclass(frozen=True)

@@ -32,6 +32,7 @@ class BlackoutShield:
         self._unlock_hold_seconds = unlock_hold_seconds
         self._snooze_seconds = snooze_seconds
         self._hotkey_started_at: float | None = None
+        self._closed = False
         self.state = ShieldState()
         self._build_windows()
 
@@ -65,6 +66,15 @@ class BlackoutShield:
             window.destroy()
         self._windows.clear()
         self._build_windows()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        for window in self._windows:
+            window.destroy()
+        self._windows.clear()
+        self.root.destroy()
 
     def poll_emergency_unlock(self) -> bool:
         pressed = (
